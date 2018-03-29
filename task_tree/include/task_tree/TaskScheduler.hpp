@@ -8,14 +8,14 @@
 
 namespace task_tree {
 
-/// Class that schedules tasks to execute on a thread pool.
+/// Class that schedules self contained tasks to execute on a thread pool at a
+/// given time.
 class TaskScheduler {
 public:
+    using Task = std::function<void()>;
+
     TaskScheduler(std::shared_ptr<ThreadPool> threadPool);
     ~TaskScheduler();
-
-    /// Get the running status.
-    bool running() const;
 
     /// Schedule a task to execute now.
     /// @param task The task to schedule.
@@ -40,12 +40,16 @@ private:
     using StateLock = std::unique_lock<std::mutex>;
     class ScheduledTask;
 
-    void scheduleAndNotifiy(ScheduledTask&& task);
     void runLoop();
+    void scheduleAndNotifiy(ScheduledTask&& task);
+
+    bool queueEmpty(StateLock&) const;
+    const ScheduledTask& queueTop(StateLock&) const;
+    ScheduledTask queuePop(StateLock&);
 
     std::shared_ptr<ThreadPool> _threadPool;
     std::thread _schedulerThread;
-    bool _running{true};
+    bool _signalStop{true};
     std::priority_queue<ScheduledTask> _scheduledTasks;
     std::condition_variable _sleepCV;
     mutable std::mutex _taskMutex;

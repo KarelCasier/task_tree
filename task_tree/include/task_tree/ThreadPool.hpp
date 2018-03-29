@@ -3,30 +3,28 @@
 #include <cstdint>
 #include <forward_list>
 #include <queue>
-
-#include "ResultFuture.hpp"
-#include "Task.hpp"
-#include "Thread.hpp"
-#include "ThreadFuture.hpp"
+#include <thread>
+#include <future>
 
 namespace task_tree {
 
 /// Class that manages a pool of threads that can be given tasks to perform.
+/// @note The destructor blocks until all tasks complete.
 class ThreadPool {
 public:
+    using Task = std::function<void()>;
     using SizeType = uint8_t;
     static constexpr SizeType DEFAULT_POOL_SIZE = 8u;
     static constexpr SizeType MAX_POOL_SIZE = std::numeric_limits<SizeType>::max();
 
     /// Create a tread pool of size @p size.
-    /// @note Caps at min(MAX_POOL_SIZE, std::thread::hardware_concurrency()).
+    /// @note size caps at min(MAX_POOL_SIZE, std::thread::hardware_concurrency()).
     /// @throws invalid_argument if @p size is 0.
     ThreadPool(SizeType size = DEFAULT_POOL_SIZE);
     ~ThreadPool();
 
     /// Set the size of the thread pool.
-    /// @note If @p size is smaller then the current size and threads are
-    ///        busy, the size will decrease when tasks are finished.
+    /// @note size caps at min(MAX_POOL_SIZE, std::thread::hardware_concurrency()).
     /// @throws invalid_argument if @p size is 0.
     /// @param size the new pool size.
     void setPoolSize(SizeType size);
@@ -36,6 +34,7 @@ public:
     SizeType getPoolSize() const;
 
     /// Queue a task to execute.
+    /// @throws runtime_error If the thread pool is stopped.
     /// @tparam Func the prototype of @p func.
     /// @tparam Args the arguments types to @p func.
     /// @param func The function to execute.
@@ -57,10 +56,12 @@ private:
     Task queuePop(StateLock&);
 
     std::thread _poolThread;
+
     bool _signalStop{false};
     std::condition_variable _sleepCV;
+
     mutable std::mutex _stateMutex;
-    std::queue<std::function<void()>> _queuedTasks;
+    std::queue<Task> _queuedTasks;
     std::forward_list<PooledThread> _threadPool;
     SizeType _currentSize{0u};
 };

@@ -33,7 +33,7 @@ private:
     bool _run{true};
     optional<Task> _task;
     std::condition_variable _sleepCV;
-    Thread _thread;
+    std::thread _thread;
 };
 
 ThreadPool::PooledThread::PooledThread()
@@ -188,12 +188,12 @@ bool ThreadPool::queueEmpty(StateLock&) const
     return _queuedTasks.empty();
 }
 
-const Task& ThreadPool::queueTop(StateLock&) const
+const ThreadPool::Task& ThreadPool::queueTop(StateLock&) const
 {
     return _queuedTasks.front();
 }
 
-Task ThreadPool::queuePop(StateLock& lock)
+ThreadPool::Task ThreadPool::queuePop(StateLock& lock)
 {
     auto task = queueTop(lock);
     _queuedTasks.pop();

@@ -40,7 +40,7 @@ TaskScheduler::ScheduledTask::ScheduledTask(Task&& task, Clock::time_point sched
 {
 }
 
-Task TaskScheduler::ScheduledTask::get()
+TaskScheduler::Task TaskScheduler::ScheduledTask::get()
 {
     if (!_task) {
         throw std::logic_error{"ScheduledTask::get should only be called once."};
@@ -69,16 +69,10 @@ TaskScheduler::~TaskScheduler()
 {
     {
         StateLock lock{_stateMutex};
-        _running = false;
+        _signalStop = false;
     }
     _sleepCV.notify_one();
     _schedulerThread.join();
-}
-
-bool TaskScheduler::running() const
-{
-    StateLock lock{_stateMutex};
-    return _running;
 }
 
 void TaskScheduler::scheduleNow(Task&& task)
@@ -117,17 +111,17 @@ void TaskScheduler::scheduleAndNotifiy(ScheduledTask&& task)
 
 void TaskScheduler::runLoop()
 {
-    while (_running) {
-        StateLock lock{_taskMutex};
-        if (!_scheduledTasks.empty()) {
-            auto nextTask = _scheduledTasks.top();
+    StateLock lock{_taskMutex};
+    while (_signalStop) {
+        if (!queueEmpty(lock)) {
+            const auto& nextTask = queueTop(lock);
             if (nextTask.scheduledAt() <= Clock::now()) {
-                _scheduledTasks.pop();
+                auto task = queuePop(lock);
                 lock.unlock();
-                _threadPool->queueTask(nextTask.get());
+                _threadPool->queueTask(task.get());
                 lock.lock();
             }
-            if (!_scheduledTasks.empty()) {
+            if (!_scheduledTasks.empty() && !_signalStop) {
                 // Sleep until the next task is scheduled to execute or another is added.
                 _sleepCV.wait_until(lock, _scheduledTasks.top().scheduledAt());
             }
@@ -136,6 +130,23 @@ void TaskScheduler::runLoop()
             _sleepCV.wait(lock);
         }
     }
+}
+
+bool TaskScheduler::queueEmpty(StateLock&) const
+{
+    return _scheduledTasks.empty();
+}
+
+const TaskScheduler::ScheduledTask& TaskScheduler::queueTop(StateLock&) const
+{
+    return _scheduledTasks.top();
+}
+
+TaskScheduler::ScheduledTask TaskScheduler::queuePop(StateLock& lock)
+{
+    auto task = queueTop(lock);
+    _scheduledTasks.pop();
+    return task;
 }
 
 /// ]]] TaskScheduler ---------------------------------------------------------
