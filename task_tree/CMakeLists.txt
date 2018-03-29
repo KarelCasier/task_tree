@@ -11,7 +11,6 @@ set(LIB_HEADERS
     )
 
 set(LIB_SOURCES
-    src/TaskScheduler.cpp
     src/ThreadPool.cpp
     )
 

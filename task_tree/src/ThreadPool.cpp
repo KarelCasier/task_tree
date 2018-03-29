@@ -16,7 +16,7 @@ public:
     ~PooledThread();
 
     /// Get the availabilty of the thread.
-    bool available() const;
+    bool free() const;
 
     /// Schedule the thread to stop when it has completed the current task.
     void scheduleStop();
@@ -47,7 +47,7 @@ ThreadPool::PooledThread::~PooledThread()
     _thread.join();
 }
 
-bool ThreadPool::PooledThread::available() const
+bool ThreadPool::PooledThread::free() const
 {
     StateLock lock{_stateMutex};
     return _run && !_task;
@@ -85,7 +85,9 @@ void ThreadPool::PooledThread::runLoop()
             lock.lock();
             _task = nullopt;
         } else {
-            _sleepCV.wait(lock);
+            if (_run) {
+                _sleepCV.wait(lock);
+            }
         }
     }
 }
@@ -95,19 +97,24 @@ void ThreadPool::PooledThread::runLoop()
 /// [[[ ThreadPool ------------------------------------------------------------
 
 ThreadPool::ThreadPool(SizeType size)
-: _poolThread([this]() { runLoop(); })
-{
+: _poolThread([this, size]() {
     setPoolSize(size);
+    runLoop();
+})
+{
 }
 
 ThreadPool::~ThreadPool()
 {
     {
         StateLock lock{_stateMutex};
-        _running = false;
+        _signalStop = true;
     }
+
     _sleepCV.notify_one();
     _poolThread.join();
+
+    resize(StateLock{_stateMutex}, 0u);
 }
 
 void ThreadPool::setPoolSize(SizeType size)
@@ -115,6 +122,7 @@ void ThreadPool::setPoolSize(SizeType size)
     if (size == 0) {
         throw std::invalid_argument{"'size' must be greater then 0."};
     }
+    size = std::min(static_cast<uint32_t>(MAX_POOL_SIZE), std::thread::hardware_concurrency());
     resize(StateLock{_stateMutex}, size);
 }
 
@@ -129,7 +137,7 @@ void ThreadPool::resize(StateLock, SizeType desiredSize)
     if (_currentSize > desiredSize) {
         while (_currentSize != desiredSize) {
             for (auto I = std::begin(_threadPool); I != std::end(_threadPool); ++I) {
-                if (I->available()) {
+                if (I->free()) {
                     I->scheduleStop();
                     if (--_currentSize == desiredSize) {
                         break;
@@ -146,40 +154,50 @@ void ThreadPool::resize(StateLock, SizeType desiredSize)
     }
 }
 
-bool ThreadPool::queueTask(Task&& task)
+ThreadPool::PooledThread& ThreadPool::waitForFreeThread(StateLock&)
 {
-    {
-        StateLock lock{_stateMutex};
-        if (!_running) {
-            return false;
+    for (;;) {
+        for (auto I = std::begin(_threadPool); I != std::end(_threadPool); ++I) {
+            if (I->free()) {
+                return *I;
+            }
         }
-        _queuedTasks.emplace(std::move(task));
+        std::this_thread::yield();
     }
-    _sleepCV.notify_one();
-    return true;
 }
 
 void ThreadPool::runLoop()
 {
-    while (_running) {
-        StateLock lock{_stateMutex};
-        while (!_queuedTasks.empty() && _currentSize) {
-            for (auto I = std::begin(_threadPool); I != std::end(_threadPool); ++I) {
-                if (I->available()) {
-                    auto task = _queuedTasks.front();
-                    _queuedTasks.pop();
-                    lock.unlock();
-                    I->execute(std::move(task));
-                    lock.lock();
-                    if (_queuedTasks.empty()) {
-                        break;
-                    }
-                }
-            }
-            std::this_thread::yield();
+    StateLock lock{_stateMutex};
+    while (!_signalStop || !queueEmpty(lock)) {
+        while (!queueEmpty(lock)) {
+            auto& thread = waitForFreeThread(lock);
+            auto task = queuePop(lock);
+            lock.unlock();
+            thread.execute(std::move(task));
+            lock.lock();
         }
-        _sleepCV.wait(lock);
+        if (queueEmpty(lock) && !_signalStop) {
+            _sleepCV.wait(lock);
+        }
     }
+}
+
+bool ThreadPool::queueEmpty(StateLock&) const
+{
+    return _queuedTasks.empty();
+}
+
+const Task& ThreadPool::queueTop(StateLock&) const
+{
+    return _queuedTasks.front();
+}
+
+Task ThreadPool::queuePop(StateLock& lock)
+{
+    auto task = queueTop(lock);
+    _queuedTasks.pop();
+    return task;
 }
 
 /// ]]] ThreadPool ------------------------------------------------------------
