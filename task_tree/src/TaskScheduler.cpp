@@ -1,4 +1,5 @@
 #include <task_tree/TaskScheduler.hpp>
+#include <task_tree/ScopedSuspendLock.hpp>
 
 #include <cassert>
 #include <experimental/optional>
@@ -69,10 +70,11 @@ TaskScheduler::~TaskScheduler()
 {
     {
         StateLock lock{_stateMutex};
-        _signalStop = false;
+        _sigStop = true;
     }
     _sleepCV.notify_one();
-    _schedulerThread.join();
+    /// Don't wait for thread to finish
+    _schedulerThread.detach();
 }
 
 void TaskScheduler::scheduleNow(Task&& task)
@@ -82,6 +84,7 @@ void TaskScheduler::scheduleNow(Task&& task)
 
 void TaskScheduler::scheduleIn(Task&& task, milliseconds delay)
 {
+    assert(delay > 0ms);
     scheduleAndNotifiy({std::move(task), Clock::now() + delay});
 }
 
@@ -97,6 +100,7 @@ void TaskScheduler::scheduleEvery(Task&& task, milliseconds delay)
 
 void TaskScheduler::scheduleAt(Task&& task, Clock::time_point timePoint)
 {
+    assert(timePoint > Clock::now());
     scheduleAndNotifiy({std::move(task), timePoint});
 }
 
@@ -112,22 +116,20 @@ void TaskScheduler::scheduleAndNotifiy(ScheduledTask&& task)
 void TaskScheduler::runLoop()
 {
     StateLock lock{_taskMutex};
-    while (_signalStop) {
+    while (!_sigStop) {
         if (!queueEmpty(lock)) {
             const auto& nextTask = queueTop(lock);
             if (nextTask.scheduledAt() <= Clock::now()) {
                 auto task = queuePop(lock);
-                lock.unlock();
+                ScopedSuspendLock suspendLock{lock};
                 _threadPool->queueTask(task.get());
-                lock.lock();
-            }
-            if (!_scheduledTasks.empty() && !_signalStop) {
-                // Sleep until the next task is scheduled to execute or another is added.
-                _sleepCV.wait_until(lock, _scheduledTasks.top().scheduledAt());
+            } else {
+                // Sleep until the next task is scheduled to execute, another is added, or signaled to stop.
+                _sleepCV.wait_until(lock, nextTask.scheduledAt());
             }
         } else {
-            // Sleep until a task is added.
-            _sleepCV.wait(lock);
+            // Sleep until a task is added or signaled to stop.
+            _sleepCV.wait(lock, [this, &lock]() { return _sigStop || !queueEmpty(lock); });
         }
     }
 }

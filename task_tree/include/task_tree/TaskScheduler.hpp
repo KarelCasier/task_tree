@@ -4,13 +4,14 @@
 #include <memory>
 #include <queue>
 
-#include "ThreadPool.hpp"
+#include <task_tree/ThreadPool.hpp>
+#include <task_tree/NonCopyable.hpp>
 
 namespace task_tree {
 
 /// Class that schedules self contained tasks to execute on a thread pool at a
 /// given time.
-class TaskScheduler {
+class TaskScheduler : public NonCopyable {
 public:
     using Task = std::function<void()>;
 
@@ -49,7 +50,7 @@ private:
 
     std::shared_ptr<ThreadPool> _threadPool;
     std::thread _schedulerThread;
-    bool _signalStop{true};
+    bool _sigStop{false};
     std::priority_queue<ScheduledTask> _scheduledTasks;
     std::condition_variable _sleepCV;
     mutable std::mutex _taskMutex;

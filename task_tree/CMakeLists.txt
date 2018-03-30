@@ -1,8 +1,8 @@
 project(task_tree LANGUAGES CXX)
 
-find_package(SDL2 REQUIRED)
-
 set(LIB_HEADERS
+    include/task_tree/NonCopyable.hpp
+    include/task_tree/ScopedSuspendLock.hpp
     include/task_tree/TaskScheduler.hpp
     include/task_tree/ThreadPool.hpp
     )

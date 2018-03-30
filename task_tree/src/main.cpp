@@ -1,7 +1,7 @@
 #include <iostream>
 #include <sstream>
+#include <cassert>
 
-#include <task_tree/ThreadPool.hpp>
 #include <task_tree/TaskScheduler.hpp>
 
 using namespace task_tree;
@@ -30,21 +30,24 @@ std::string print(Args... args)
 
 int main(int /*argv*/, char** /*argc*/)
 {
-    auto t = [](int x) {
+    auto t = [](std::atomic<unsigned int>* a, int x) {
         print(x, '\n');
-        std::this_thread::sleep_for(5ms);
+        a->fetch_add(1);
+        std::this_thread::sleep_for(100000ns);
     };
-    auto times = 1000u;
+    auto times = 100000u;
 
     std::cout << "Async\n";
     {
         auto start = std::chrono::steady_clock::now();
+        std::atomic<unsigned int> count;
         {
-            auto threadPool = ThreadPool{};
+            ThreadPool threadPool{};
             for (auto i{0u}; i < times; ++i) {
-                threadPool.queueTask(t, i);
+                threadPool.queueTask(t, &count, i);
             }
         }
+        assert(count == times);
         std::cout
             << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
             << std::endl;
@@ -53,11 +56,13 @@ int main(int /*argv*/, char** /*argc*/)
     std::cout << "Sync\n";
     {
         auto start = std::chrono::steady_clock::now();
+        std::atomic<unsigned int> count;
         {
             for (auto i{0u}; i < times; ++i) {
-                t(i);
+                t(&count, i);
             }
         }
+        assert(count == times);
         std::cout
             << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count()
             << std::endl;

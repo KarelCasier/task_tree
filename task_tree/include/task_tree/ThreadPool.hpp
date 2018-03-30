@@ -1,30 +1,33 @@
 #pragma once
 
 #include <cstdint>
-#include <forward_list>
+#include <list>
 #include <queue>
 #include <thread>
 #include <future>
 
+#include <task_tree/NonCopyable.hpp>
+
 namespace task_tree {
 
 /// Class that manages a pool of threads that can be given tasks to perform.
-/// @note The destructor blocks until all tasks complete.
-class ThreadPool {
+/// @note Destruction blocks until all queued tasks complete.
+class ThreadPool : public NonCopyable {
 public:
     using Task = std::function<void()>;
     using SizeType = uint8_t;
-    static constexpr SizeType DEFAULT_POOL_SIZE = 8u;
-    static constexpr SizeType MAX_POOL_SIZE = std::numeric_limits<SizeType>::max();
 
-    /// Create a tread pool of size @p size.
-    /// @note size caps at min(MAX_POOL_SIZE, std::thread::hardware_concurrency()).
-    /// @throws invalid_argument if @p size is 0.
-    ThreadPool(SizeType size = DEFAULT_POOL_SIZE);
     ~ThreadPool();
 
+    /// Create a thread pool of size @p size.
+    /// @note size caps at min(size, std::thread::hardware_concurrency()).
+    /// @throws invalid_argument if @p size is 0.
+    ThreadPool(SizeType size);
+    /// Create a thread pool of default size (std::thread::hardware_concurrency())
+    ThreadPool();
+
     /// Set the size of the thread pool.
-    /// @note size caps at min(MAX_POOL_SIZE, std::thread::hardware_concurrency()).
+    /// @note size caps at std::thread::hardware_concurrency().
     /// @throws invalid_argument if @p size is 0.
     /// @param size the new pool size.
     void setPoolSize(SizeType size);
@@ -48,8 +51,9 @@ private:
     class PooledThread;
 
     void runLoop();
-    void resize(StateLock lock, SizeType desiredSize);
-    PooledThread& waitForFreeThread(StateLock& lock);
+    void resizePool(StateLock&, SizeType desiredSize);
+    auto waitForFreeThread(StateLock&) -> std::list<PooledThread>::iterator;
+    SizeType poolSize(StateLock&) const;
 
     bool queueEmpty(StateLock&) const;
     const Task& queueTop(StateLock&) const;
@@ -57,13 +61,13 @@ private:
 
     std::thread _poolThread;
 
-    bool _signalStop{false};
+    bool _sigStop{false};
     std::condition_variable _sleepCV;
 
     mutable std::mutex _stateMutex;
     std::queue<Task> _queuedTasks;
-    std::forward_list<PooledThread> _threadPool;
-    SizeType _currentSize{0u};
+    std::list<PooledThread> _threadPool;
+    SizeType _targetSize;
 };
 
 template <typename Func, typename... Args>
@@ -71,7 +75,7 @@ auto ThreadPool::queueTask(Func&& func, Args... args) -> std::future<decltype(fu
 {
     {
         StateLock lock{_stateMutex};
-        if (_signalStop) {
+        if (_sigStop) {
             throw std::runtime_error{"Can not queue task on stopped ThreadPool"};
         }
     }

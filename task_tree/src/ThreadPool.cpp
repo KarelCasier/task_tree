@@ -1,4 +1,5 @@
 #include <task_tree/ThreadPool.hpp>
+#include <task_tree/ScopedSuspendLock.hpp>
 
 #include <experimental/optional>
 #include <iostream>
@@ -18,8 +19,8 @@ public:
     /// Get the availabilty of the thread.
     bool free() const;
 
-    /// Schedule the thread to stop when it has completed the current task.
-    void scheduleStop();
+    /// Signal the thread to stop when it has completed the current task.
+    void signalStop();
 
     /// Execute a task.
     /// @param task The task to execute.
@@ -30,7 +31,7 @@ private:
     void runLoop();
 
     mutable std::mutex _stateMutex;
-    bool _run{true};
+    bool _sigStop{false};
     optional<Task> _task;
     std::condition_variable _sleepCV;
     std::thread _thread;
@@ -43,21 +44,22 @@ ThreadPool::PooledThread::PooledThread()
 
 ThreadPool::PooledThread::~PooledThread()
 {
-    scheduleStop();
-    _thread.join();
+    signalStop();
+    /// Don't wait for thread to finish
+    _thread.detach();
 }
 
 bool ThreadPool::PooledThread::free() const
 {
     StateLock lock{_stateMutex};
-    return _run && !_task;
+    return !_sigStop && !_task;
 }
 
-void ThreadPool::PooledThread::scheduleStop()
+void ThreadPool::PooledThread::signalStop()
 {
     {
         StateLock lock{_stateMutex};
-        _run = false;
+        _sigStop = true;
     }
     _sleepCV.notify_one();
 }
@@ -77,18 +79,14 @@ bool ThreadPool::PooledThread::execute(Task&& task)
 
 void ThreadPool::PooledThread::runLoop()
 {
-    while (_run) {
+    while (!_sigStop) {
         StateLock lock{_stateMutex};
         if (_task) {
-            lock.unlock();
+            ScopedSuspendLock suspendLock{lock};
             (*_task)();
-            lock.lock();
-            _task = nullopt;
-        } else {
-            if (_run) {
-                _sleepCV.wait(lock);
-            }
         }
+        _task = nullopt;
+        _sleepCV.wait(lock, [this]() { return _sigStop || _task; });
     }
 }
 
@@ -104,62 +102,72 @@ ThreadPool::ThreadPool(SizeType size)
 {
 }
 
+ThreadPool::ThreadPool()
+: ThreadPool(std::thread::hardware_concurrency())
+{
+}
+
 ThreadPool::~ThreadPool()
 {
     {
         StateLock lock{_stateMutex};
-        _signalStop = true;
+        _sigStop = true;
     }
 
     _sleepCV.notify_one();
     _poolThread.join();
-
-    resize(StateLock{_stateMutex}, 0u);
 }
 
 void ThreadPool::setPoolSize(SizeType size)
 {
     if (size == 0) {
-        throw std::invalid_argument{"'size' must be greater then 0."};
+        throw std::runtime_error{"Can not set pool size to 0"};
     }
-    size = std::min(static_cast<uint32_t>(MAX_POOL_SIZE), std::thread::hardware_concurrency());
-    resize(StateLock{_stateMutex}, size);
+    const auto maxSize =
+        std::min(static_cast<uint32_t>(std::numeric_limits<SizeType>::max()), std::thread::hardware_concurrency());
+    if (size > maxSize) {
+        std::cout << "Capping thread pool size to " << maxSize << std::endl;
+        size = maxSize;
+    }
+    StateLock lock{_stateMutex};
+    _targetSize = size;
 }
 
 ThreadPool::SizeType ThreadPool::getPoolSize() const
 {
     StateLock lock{_stateMutex};
-    return _currentSize;
+    return poolSize(lock);
 }
 
-void ThreadPool::resize(StateLock, SizeType desiredSize)
+ThreadPool::SizeType ThreadPool::poolSize(StateLock&) const
 {
-    if (_currentSize > desiredSize) {
-        while (_currentSize != desiredSize) {
-            for (auto I = std::begin(_threadPool); I != std::end(_threadPool); ++I) {
-                if (I->free()) {
-                    I->scheduleStop();
-                    if (--_currentSize == desiredSize) {
-                        break;
-                    }
-                }
+    return _threadPool.size();
+}
+
+void ThreadPool::resizePool(StateLock& lock, SizeType desiredSize)
+{
+    if (poolSize(lock) > desiredSize) {
+        while (poolSize(lock) != desiredSize) {
+            auto I = waitForFreeThread(lock);
+            I->signalStop();
+            I = _threadPool.erase(I);
+            if (poolSize(lock) == desiredSize) {
+                break;
             }
-            std::this_thread::yield();
         }
-    } else if (_currentSize < desiredSize) {
-        while (_currentSize != desiredSize) {
+    } else if (poolSize(lock) < desiredSize) {
+        while (poolSize(lock) != desiredSize) {
             _threadPool.emplace_front();
-            ++_currentSize;
         }
     }
 }
 
-ThreadPool::PooledThread& ThreadPool::waitForFreeThread(StateLock&)
+auto ThreadPool::waitForFreeThread(StateLock&) -> std::list<PooledThread>::iterator
 {
     for (;;) {
         for (auto I = std::begin(_threadPool); I != std::end(_threadPool); ++I) {
             if (I->free()) {
-                return *I;
+                return I;
             }
         }
         std::this_thread::yield();
@@ -169,18 +177,23 @@ ThreadPool::PooledThread& ThreadPool::waitForFreeThread(StateLock&)
 void ThreadPool::runLoop()
 {
     StateLock lock{_stateMutex};
-    while (!_signalStop || !queueEmpty(lock)) {
-        while (!queueEmpty(lock)) {
-            auto& thread = waitForFreeThread(lock);
-            auto task = queuePop(lock);
-            lock.unlock();
-            thread.execute(std::move(task));
-            lock.lock();
+    while (!_sigStop || !queueEmpty(lock)) {
+        if (poolSize(lock) != _targetSize) {
+            resizePool(lock, _targetSize);
         }
-        if (queueEmpty(lock) && !_signalStop) {
+        while (!queueEmpty(lock)) {
+            auto thread = waitForFreeThread(lock);
+            auto task = queuePop(lock);
+            {
+                ScopedSuspendLock suspendLock{lock};
+                thread->execute(std::move(task));
+            }
+        }
+        if (queueEmpty(lock) && !_sigStop) {
             _sleepCV.wait(lock);
         }
     }
+    resizePool(lock, 0u);
 }
 
 bool ThreadPool::queueEmpty(StateLock&) const
