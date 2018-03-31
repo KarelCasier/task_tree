@@ -2,27 +2,30 @@
 
 A simple ThreadPool and TaskScheduler in c++.
 
-### quickstart
+## quickstart
 
-#### macos
+see [task_tree/src/main.cpp](task_tree/src/main.cpp) for usage examples.
+
+## building
+
+### macos
 
 ```sh
 brew install CMake Ninja
 brew install llvm
 ```
 
-## build
+#### build
 
 ```sh
 mkdir out/
 cd out/
-cmake ../src -G Ninja
+cmake .. -G Ninja
 ninja
 ```
 
-## run
+#### run
 
 ```sh
 ./bin/task_tree
 ```
-
