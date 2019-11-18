@@ -1,0 +1,19 @@
+name: C/C++ CI
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v1
+    - name: Install ninja-build tool
+      uses: seanmiddleditch/gha-setup-ninja@v1
+    - name: ghaction-cmake
+      uses: lpenz/ghaction-cmake@v0.1
+    - name: configure build
+      run: cmake . -G Ninja
+    - name: build
+      run: ninja
