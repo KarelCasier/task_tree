@@ -28,5 +28,6 @@ add_executable(task_tree ${EXEC_SOURCES})
 
 target_link_libraries(task_tree
     task_tree_lib
+    pthread
     )
 
