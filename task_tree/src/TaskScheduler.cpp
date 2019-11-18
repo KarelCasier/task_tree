@@ -2,7 +2,7 @@
 #include <task_tree/ScopedSuspendLock.hpp>
 
 #include <cassert>
-#include <experimental/optional>
+#include <optional>
 #include <iostream>
 
 namespace task_tree {
@@ -10,8 +10,6 @@ namespace task_tree {
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 using std::chrono::milliseconds;
-using std::experimental::nullopt;
-using std::experimental::optional;
 
 /// [[[ TaskScheduler::ScheduledTask ------------------------------------------
 
@@ -31,7 +29,7 @@ public:
     bool operator<(const ScheduledTask& other) const { return _scheduledAt > other._scheduledAt; }
 
 private:
-    optional<Task> _task;
+    std::optional<Task> _task;
     Clock::time_point _scheduledAt;
 };
 
@@ -46,7 +44,7 @@ TaskScheduler::Task TaskScheduler::ScheduledTask::get()
     if (!_task) {
         throw std::logic_error{"ScheduledTask::get should only be called once."};
     }
-    auto returnTask = optional<Task>{nullopt};
+    auto returnTask = std::optional<Task>{std::nullopt};
     _task.swap(returnTask);
     return std::move(*returnTask);
 }

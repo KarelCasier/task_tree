@@ -1,13 +1,10 @@
 #include <task_tree/ThreadPool.hpp>
 #include <task_tree/ScopedSuspendLock.hpp>
 
-#include <experimental/optional>
+#include <optional>
 #include <iostream>
 
 namespace task_tree {
-
-using std::experimental::nullopt;
-using std::experimental::optional;
 
 /// [[[ ThreadPool::PooledThread ----------------------------------------------
 
@@ -32,7 +29,7 @@ private:
 
     mutable std::mutex _stateMutex;
     bool _sigStop{false};
-    optional<Task> _task;
+    std::optional<Task> _task;
     std::condition_variable _sleepCV;
     std::thread _thread;
 };
@@ -85,7 +82,7 @@ void ThreadPool::PooledThread::runLoop()
             ScopedSuspendLock suspendLock{lock};
             (*_task)();
         }
-        _task = nullopt;
+        _task = std::nullopt;
         _sleepCV.wait(lock, [this]() { return _sigStop || _task; });
     }
 }
