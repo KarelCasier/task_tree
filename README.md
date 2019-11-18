@@ -1,4 +1,4 @@
-[![Actions Status](https://github.com/karelcasier/task_tree/workflows/Build/badge.svg](https://github.com/karelcasier/task_tree/actions)
+![Actions Status](https://github.com/karelcasier/task_tree/workflows/Build/badge.svg](https://github.com/karelcasier/task_tree/actions)
 
 # task_tree
 
